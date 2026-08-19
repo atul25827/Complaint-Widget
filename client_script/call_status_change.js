@@ -1,7 +1,7 @@
 /**
  * Zoho CRM Client Script - Call Status Field Change Trigger
  * =========================================================
- * Module:      Test
+ * Module:      Test (CustomModule19)
  * Field:       Pick_List_1 (Call Status)
  * Event:       On Field Change
  * Target:      Opens the Complaint Solution Widget in a Popup Dialog
@@ -13,7 +13,6 @@
     console.log("[Client Script Debug] Execution started.");
     console.log("[Client Script Debug] 'value' parameter:", typeof value !== "undefined" ? value : "undefined");
     console.log("[Client Script Debug] 'context' parameter:", typeof context !== "undefined" ? context : "undefined");
-    console.log("[Client Script Debug] Global ZDK:", typeof ZDK !== "undefined" ? ZDK : "undefined");
 
     // Dynamic Page Object Resolver
     let pageObj = null;
@@ -70,15 +69,24 @@
     const productId = typeof product === "object" ? product.id : product;
     const productName = typeof product === "object" ? (product.name || product.Product_Name || "") : product;
 
-    // 3. Obtain current record ID safely
-    const recordId = typeof pageObj.getRecordId === "function" ? pageObj.getRecordId() : null;
+    // 3. Obtain current record ID safely with URL fallback
+    let recordId = typeof pageObj.getRecordId === "function" ? pageObj.getRecordId() : null;
+
+    if (!recordId && typeof window !== "undefined" && window.location) {
+      const match = window.location.href.match(/(\d{17,20})/);
+      if (match) {
+        recordId = match[1];
+        console.log("[Client Script Debug] Extracted recordId from window.location.href fallback:", recordId);
+      }
+    }
+
+    console.log("[Client Script Debug] Final recordId:", recordId, "productId:", productId, "productName:", productName);
 
     /**
      * 4. Open Widget Popup Dialog
      * Widget API Name matching Setup > Developer Space > Widgets (API Name column)
-     * e.g., "Complaint_Solution_Widget" or "Complaint_Solution_Selection_Popup"
      */
-    const widgetApiName = "Complaint_Solution_Widget"; 
+    const widgetApiName = "Complaint_Solution_Widget";
     const client = (typeof ZDK !== "undefined" && ZDK.Client) ? ZDK.Client : (typeof window !== "undefined" && window.ZDK ? window.ZDK.Client : null);
 
     if (client && typeof client.openPopup === "function") {
@@ -99,8 +107,11 @@
       client.openWidget({
         api_name: widgetApiName,
         params: {
-          Entity: "Test",
-          EntityId: recordId
+          Entity: "CustomModule19",
+          EntityId: recordId,
+          recordId: recordId,
+          productId: productId,
+          productName: productName
         }
       });
     } else {

@@ -2,171 +2,90 @@
  * app.js
  * ────────────────────────────────────────────────────────────
  * Main Widget Lifecycle Controller & Zoho CRM Embedded App Initialization.
- * STRICTLY LIVE CRM DATA ONLY - ASYNC SDK LOAD GUARD.
  */
 
 import { state, setState, subscribe } from './state.js';
-import { getCurrentRecordProduct, fetchComplaintCategories } from './api.js';
+import { getProductById, fetchComplaintCategories } from './api.js';
 import { renderApp } from './render.js';
 import { initEventListeners } from './events.js';
-import { showToast, log } from './utils.js';
-
-let isAppInitialized = false;
-
-// Global Unhandled Exception Listener for Host Environment Debugging
-window.addEventListener('error', (event) => {
-  log.error(`Global Uncaught Exception: ${event.message} at ${event.filename}:${event.lineno}:${event.colno}`, event.error);
-});
-
-window.addEventListener('unhandledrejection', (event) => {
-  log.error(`Global Unhandled Promise Rejection: ${event.reason}`, event.reason);
-});
+import { showToast } from './utils.js';
 
 /**
- * Initialize Widget data & UI for target Record ID via Live Zoho CRM APIs.
- * @param {string} recordId 
- * @param {string} [entityName]
+ * Initialize the widget with data received from the Client Script.
  */
-export async function initialize(recordId, entityName = null) {
-  if (isAppInitialized) {
-    log.warn(`initialize() called again for RecordID: "${recordId}", skipping duplicate call.`);
-    return;
-  }
-  isAppInitialized = true;
+async function initialize(data) {
+  const recordId = data?.recordId || null;
+  const productId = data?.productId || null;
+  const productName = data?.productName || '';
+  const pickListValue = data?.pickListValue || '';
 
-  log.info(`Initializing Widget for Live Record ID: "${recordId}", Entity: "${entityName}"`);
-
-  // Subscribe UI renderer to state changes
-  subscribe((currentState, changeType) => {
-    try {
-      renderApp(currentState, changeType);
-    } catch (renderErr) {
-      log.error(`UI Render failed during state change: ${changeType}`, renderErr);
-    }
-  });
-
-  // Bind all interactive DOM event listeners
-  try {
-    initEventListeners();
-  } catch (eventErr) {
-    log.error('Failed to bind event listeners', eventErr);
-  }
+  // ── Only console: confirm Product info received or not ──
+  console.log("[Product Widget] Product Info Received:", productId ? "YES" : "NO", { productId, productName, pickListValue });
 
   setState({
     recordId,
-    loadingRecord: true,
+    productId,
+    productName,
+    pickListValue,
+    loading: true,
     error: null
   }, 'INIT_START');
 
-  try {
-    // 1. Get Product from CRM record via Live API
-    log.info(`Calling ZOHO.CRM.API.getRecord for RecordID: "${recordId}", Entity: "${entityName}"...`);
-    const product = await getCurrentRecordProduct(recordId, entityName);
+  if (!productId) {
+    setState({
+      loading: false,
+      error: 'Product not selected.\nPlease select a Product from the CRM record.'
+    }, 'PRODUCT_NOT_SELECTED');
+    return;
+  }
 
-    if (!product || !product.id) {
-      throw new Error(`Product is not selected or invalid on Record ID: "${recordId}".`);
+  try {
+    const productRecord = await getProductById(productId);
+
+    if (!productRecord) {
+      setState({
+        loading: false,
+        error: 'Product record could not be found.'
+      }, 'PRODUCT_NOT_FOUND');
+      return;
     }
 
-    log.info(`Live Product Loaded -> ID: "${product.id}", Name: "${product.name}"`);
+    const product = {
+      ...productRecord,
+      id: productRecord.id || productId,
+      name: productRecord.Product_Name || productName || '-',
+      code: productRecord.Product_Code || '-'
+    };
 
-    // 2. Fetch Complaint Categories for Product via Live CRM API
-    log.info(`Calling ZOHO.CRM.API.searchRecord for Complaint_Category (Product ID: "${product.id}", Name: "${product.name}")...`);
-    const complaints = await fetchComplaintCategories(product.id, product.name);
+    let complaints = [];
+    try {
+      complaints = await fetchComplaintCategories(productId);
+    } catch (catErr) { /* no categories */ }
 
     setState({
-      productId: product.id,
+      product,
       productName: product.name,
       complaints,
-      loadingRecord: false
+      loading: false,
+      error: null
     }, 'INIT_SUCCESS');
 
     if (complaints.length === 0) {
-      log.warn(`No complaint categories found in Zoho CRM for Product: "${product.name}"`);
       showToast(`No complaint categories found for ${product.name}`, 'info');
-    } else {
-      log.info(`Loaded ${complaints.length} complaint category options from Zoho CRM.`);
     }
 
   } catch (err) {
-    log.error(`Widget Initialization Failed for Record ID: "${recordId}"`, err);
     setState({
-      loadingRecord: false,
-      productName: '--',
-      error: err.message || 'Failed to initialize record metadata from Zoho CRM.'
-    }, 'INIT_ERROR');
+      loading: false,
+      error: 'Unable to load Product information.\nPlease try again.'
+    }, 'PRODUCT_API_ERROR');
   }
 }
 
 /**
- * Extract Record ID from Zoho Embedded App PageLoad data, params object, or URL string.
- * Supports Zoho CRM 18-digit numerical IDs (e.g. 143890000591299037).
- * @param {any} data 
- * @returns {string|null}
+ * Wait for ZOHO SDK to become available.
  */
-function extractRecordId(data) {
-  if (data) {
-    if (data.EntityId && Array.isArray(data.EntityId) && data.EntityId.length > 0) {
-      return data.EntityId[0];
-    }
-    if (data.EntityId && typeof data.EntityId === 'string') {
-      return data.EntityId;
-    }
-    if (data.Entity && data.Entity.id) {
-      return data.Entity.id;
-    }
-    if (data.params && data.params.recordId) {
-      return data.params.recordId;
-    }
-    if (data.params && data.params.EntityId) {
-      return data.params.EntityId;
-    }
-    if (data.recordId) {
-      return data.recordId;
-    }
-    if (data.rec_id) {
-      return data.rec_id;
-    }
-    if (data.id) {
-      return data.id;
-    }
-  }
-
-  // Check URL Query parameters
-  const urlParams = new URLSearchParams(window.location.search);
-  let id = urlParams.get('recordId') || urlParams.get('EntityId') || urlParams.get('rec_id') || urlParams.get('id');
-
-  // Fallback: Regex match 17-20 digit numerical ID from iframe location URL
-  if (!id) {
-    const match = window.location.href.match(/(\d{17,20})/);
-    if (match) {
-      id = match[1];
-    }
-  }
-
-  return id;
-}
-
-/**
- * Extract Module API Name passed from Zoho CRM
- * @param {any} data 
- * @returns {string|null}
- */
-function extractEntityName(data) {
-  if (data) {
-    if (data.Entity && typeof data.Entity === 'string') return data.Entity;
-    if (data.EntityName && typeof data.EntityName === 'string') return data.EntityName;
-    if (data.module && typeof data.module === 'string') return data.module;
-  }
-  return 'CustomModule19';
-}
-
-/**
- * Wait for window.ZOHO.embeddedApp to become available.
- * Polls every 20ms up to maxWaitMs (5000ms) while SDK script downloads.
- * @param {number} maxWaitMs 
- * @returns {Promise<any>}
- */
-function waitForZohoSDK(maxWaitMs = 5000) {
+function waitForZohoSDK(maxWaitMs = 15000) {
   return new Promise((resolve) => {
     const startTime = Date.now();
     const poll = () => {
@@ -175,7 +94,7 @@ function waitForZohoSDK(maxWaitMs = 5000) {
       } else if (Date.now() - startTime >= maxWaitMs) {
         resolve(null);
       } else {
-        setTimeout(poll, 20);
+        setTimeout(poll, 50);
       }
     };
     poll();
@@ -183,64 +102,45 @@ function waitForZohoSDK(maxWaitMs = 5000) {
 }
 
 /**
- * Helper to bootstrap ZOHO.embeddedApp initialization with network delay tolerance
+ * Bootstrap the Zoho Widget application.
  */
 async function startZohoApp() {
-  log.info('DOM Content Loaded. Waiting for ZOHO.embeddedApp SDK script to load...');
+  subscribe((currentState, changeType) => {
+    try {
+      renderApp(currentState, changeType);
+    } catch (renderErr) { /* silent */ }
+  });
 
-  const embeddedApp = await waitForZohoSDK(5000);
+  try {
+    initEventListeners();
+  } catch (eventErr) { /* silent */ }
+
+  const embeddedApp = await waitForZohoSDK(15000);
 
   if (!embeddedApp) {
-    log.warn('ZOHO.embeddedApp SDK script did not load within 5s. Checking URL query parameters...');
-    const recordId = extractRecordId(null);
-    const entityName = extractEntityName(null);
-
-    if (recordId) {
-      log.info(`Extracted recordId from URL query: "${recordId}", Entity: "${entityName}"`);
-      initialize(recordId, entityName);
-    } else {
-      const errorMsg = 'ZOHO.embeddedApp SDK is not available and no recordId URL parameter was provided.';
-      log.error(errorMsg);
-      setState({
-        loadingRecord: false,
-        productName: '--',
-        error: errorMsg
-      }, 'NO_SDK');
-    }
+    setState({
+      loading: false,
+      error: 'Zoho CRM SDK is not available.\nPlease ensure this widget is opened from within Zoho CRM.'
+    }, 'SDK_UNAVAILABLE');
     return;
   }
 
-  log.info('ZOHO.embeddedApp detected! Registering PageLoad event handler...');
-
+  // Register PageLoad BEFORE init()
   embeddedApp.on("PageLoad", async function (data) {
-    log.info('ZOHO.embeddedApp PageLoad event received! Raw Payload:', data);
-
-    const recordId = extractRecordId(data);
-    const entityName = extractEntityName(data);
-
-    if (!recordId) {
-      const errorMsg = 'No valid Record ID received from Zoho CRM PageLoad event.';
-      log.error(errorMsg, data);
-      setState({
-        loadingRecord: false,
-        productName: '--',
-        error: errorMsg
-      }, 'NO_RECORD_ID');
-      return;
-    }
-
-    await initialize(recordId, entityName);
+    await initialize(data);
   });
 
-  log.info('Executing ZOHO.embeddedApp.init()...');
-  embeddedApp.init().then(() => {
-    log.info('ZOHO.embeddedApp.init() resolved successfully.');
-  }).catch(err => {
-    log.error('ZOHO.embeddedApp.init() rejected with error:', err);
-  });
+  try {
+    await embeddedApp.init();
+  } catch (err) {
+    setState({
+      loading: false,
+      error: 'Failed to initialize Zoho CRM Widget.\nPlease reload and try again.'
+    }, 'INIT_FAILED');
+  }
 }
 
-// Start app as soon as script evaluates or on DOMReady
+// Start app
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', startZohoApp);
 } else {

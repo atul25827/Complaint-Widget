@@ -5,54 +5,9 @@
  * search filtering, and Zoho-styled toast notifications.
  */
 
-// Structured logger utility for console debugging when hosting widget in Zoho CRM.
-export const log = {
-  info: (msg, data) => console.log(`%c[Zoho Widget INFO] ${msg}`, 'color: #2266e3; font-weight: bold;', data !== undefined ? data : ''),
-  warn: (msg, data) => console.warn(`%c[Zoho Widget WARN] ${msg}`, 'color: #f59e0b; font-weight: bold;', data !== undefined ? data : ''),
-  error: (msg, err) => console.error(`%c[Zoho Widget ERROR] ${msg}`, 'color: #ef4444; font-weight: bold;', err !== undefined ? err : '')
-};
-
 /**
- * DOM selector helper for ID or CSS selector.
- * @param {string} selector 
- * @returns {HTMLElement|null}
- */
-export function $(selector) {
-  if (!selector) return null;
-  return document.getElementById(selector) || document.querySelector(selector);
-}
-
-/**
- * Clear all child nodes of an element safely.
- * @param {HTMLElement} el 
- */
-export function clearChildren(el) {
-  if (el) {
-    el.innerHTML = '';
-  }
-}
-
-/**
- * Create a DOM element with optional classes and attributes.
- * @param {string} tag 
- * @param {Array<string>} classes 
- * @param {Object} attrs 
- * @returns {HTMLElement}
- */
-export function createElement(tag = 'div', classes = [], attrs = {}) {
-  const el = document.createElement(tag);
-  if (Array.isArray(classes)) {
-    classes.forEach(c => c && el.classList.add(c));
-  }
-  if (attrs && typeof attrs === 'object') {
-    Object.keys(attrs).forEach(k => el.setAttribute(k, attrs[k]));
-  }
-  return el;
-}
-
-/**
- * Escape HTML to prevent XSS vulnerabilities in custom templates.
- * @param {string} str 
+ * Escape HTML to prevent XSS in templates.
+ * @param {string} str
  * @returns {string}
  */
 export function escapeHtml(str) {
@@ -65,13 +20,10 @@ export function escapeHtml(str) {
     .replace(/'/g, '&#039;');
 }
 
-// Alias for case compatibility
-export const escapeHTML = escapeHtml;
-
 /**
  * Case-insensitive search match test.
- * @param {string} text 
- * @param {string} query 
+ * @param {string} text
+ * @param {string} query
  * @returns {boolean}
  */
 export function matchesSearch(text, query) {
@@ -81,31 +33,17 @@ export function matchesSearch(text, query) {
 }
 
 /**
- * Debounce helper for input search handlers.
- * @param {Function} fn 
- * @param {number} delayMs 
- * @returns {Function}
- */
-export function debounce(fn, delayMs = 250) {
-  let timeoutId;
-  return function (...args) {
-    clearTimeout(timeoutId);
-    timeoutId = setTimeout(() => fn.apply(this, args), delayMs);
-  };
-}
-
-/**
- * Display a Zoho CRM styled toast message notification.
- * @param {string} message 
- * @param {'success'|'error'|'warning'|'info'} type 
- * @param {number} durationMs 
+ * Display a Zoho CRM styled toast notification.
+ * @param {string} message
+ * @param {'success'|'error'|'warning'|'info'} type
+ * @param {number} durationMs
  */
 export function showToast(message, type = 'info', durationMs = 3000) {
-  const container = document.getElementById('toastContainer') || document.getElementById('toast-container');
+  const container = document.getElementById('toastContainer');
   if (!container) return;
 
   const toast = document.createElement('div');
-  toast.className = `zc-toast zc-toast-${type} animate-fade-in`;
+  toast.className = `zc-toast zc-toast-${type}`;
 
   let iconSvg = '';
   if (type === 'success') {
@@ -126,11 +64,9 @@ export function showToast(message, type = 'info', durationMs = 3000) {
 
   const closeBtn = toast.querySelector('.zc-toast-close');
   const dismiss = () => {
-    toast.classList.add('animate-fade-out');
+    toast.style.opacity = '0';
     setTimeout(() => {
-      if (toast.parentNode) {
-        toast.parentNode.removeChild(toast);
-      }
+      if (toast.parentNode) toast.parentNode.removeChild(toast);
     }, 200);
   };
 
@@ -140,4 +76,20 @@ export function showToast(message, type = 'info', durationMs = 3000) {
   if (durationMs > 0) {
     setTimeout(dismiss, durationMs);
   }
+}
+
+/**
+ * Format a value for display. Handles objects, booleans, null, etc.
+ * @param {any} value
+ * @returns {string}
+ */
+export function formatDisplayValue(value) {
+  if (value === null || value === undefined || value === '') return '-';
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  if (typeof value === 'object') {
+    if (value.name) return value.name;
+    if (value.display_value) return value.display_value;
+    return JSON.stringify(value);
+  }
+  return String(value);
 }

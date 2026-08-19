@@ -1,31 +1,34 @@
 /**
  * state.js
  * ────────────────────────────────────────────────────────────
- * Centralized widget state store with pub/sub subscriber pattern
- * to trigger clean UI re-renders on state mutation.
+ * Centralized widget state store with pub/sub subscriber pattern.
  */
 
 export const state = {
+  // Context from Client Script PageLoad
   recordId: null,
   productId: null,
   productName: '',
+  pickListValue: '',
 
-  complaints: [],         // Array<{ id, name }>
-  solutions: [],          // Array<{ id, name }>
+  // Product record from Products API
+  product: null,
 
-  selectedComplaint: null,// { id, name } or null
-  selectedSolutions: [],  // Array<{ id, name }>
+  // Complaint/Solution mapping data
+  complaints: [],
+  solutions: [],
+  selectedComplaint: null,
+  selectedSolutions: [],
+  rows: [],
 
-  rows: [],               // Array<{ complaintId, complaintName, solutionId, solutionName }>
-
-  // UI operational states
-  loadingRecord: true,
+  // UI states
+  loading: true,
   loadingComplaints: false,
   loadingSolutions: false,
   saving: false,
   error: null,
 
-  // Dropdown search inputs
+  // Dropdown search
   complaintSearch: '',
   solutionSearch: ''
 };
@@ -33,8 +36,8 @@ export const state = {
 const listeners = [];
 
 /**
- * Register a change listener to receive updates when state changes.
- * @param {Function} listenerFn 
+ * Register a state change listener.
+ * @param {Function} listenerFn
  */
 export function subscribe(listenerFn) {
   if (typeof listenerFn === 'function') {
@@ -43,23 +46,23 @@ export function subscribe(listenerFn) {
 }
 
 /**
- * Notify all subscribers of state changes.
- * @param {string} [changeType] 
+ * Notify all subscribers.
+ * @param {string} changeType
  */
-export function notify(changeType = 'ALL') {
+function notify(changeType = 'ALL') {
   listeners.forEach(fn => {
     try {
       fn(state, changeType);
     } catch (e) {
-      console.error('[Widget State] Listener error:', e);
+      /* silent */
     }
   });
 }
 
 /**
- * Update state object and notify subscribers.
- * @param {Partial<typeof state>} updates 
- * @param {string} [changeType]
+ * Update state and notify subscribers.
+ * @param {Partial<typeof state>} updates
+ * @param {string} changeType
  */
 export function setState(updates, changeType = 'ALL') {
   Object.assign(state, updates);
@@ -67,7 +70,7 @@ export function setState(updates, changeType = 'ALL') {
 }
 
 /**
- * Reset dropdown selections and solution items.
+ * Reset dropdown selections.
  */
 export function resetSelections() {
   state.selectedComplaint = null;

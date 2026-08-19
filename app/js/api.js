@@ -1,271 +1,207 @@
 /**
  * api.js
  * ────────────────────────────────────────────────────────────
- * Production Zoho CRM API Integration Layer with dynamic module resolution
- * supporting CustomModule19, Test Only, and Test modules.
+ * Zoho CRM API integration layer.
  */
 
 import { MODULES, FIELDS } from './constants.js';
-import { log } from './utils.js';
 
 /**
- * Check if running within active Zoho CRM Embedded Environment.
+ * Check if ZOHO CRM API is available.
  * @returns {boolean}
  */
 export function isZohoEnvironment() {
   return (
     typeof window.ZOHO !== 'undefined' &&
-    typeof window.ZOHO.CRM !== 'undefined' &&
-    typeof window.ZOHO.CRM.API !== 'undefined'
+    window.ZOHO.CRM &&
+    window.ZOHO.CRM.API
   );
 }
 
 /**
- * Helper to extract Product object from CRM record
- * @param {any} record 
- * @returns {{id: string, name: string}|null}
+ * Fetch a Product record by its ID from the Products module.
+ * @param {string} productId
+ * @returns {Promise<Object|null>}
  */
-function extractProductFromRecord(record) {
-  if (!record) return null;
-  const product = record[FIELDS.PRODUCT] || record.Product;
-  if (!product) return null;
-
-  let id = null;
-  let name = '';
-
-  if (typeof product === 'object' && product !== null) {
-    id = product.id || product.ID || null;
-    name = product.name || product.Product_Name || product.display_value || '';
-  } else if (typeof product === 'string') {
-    id = product;
-    name = product;
+export async function getProductById(productId) {
+  if (!productId) {
+    throw new Error('Product ID is required');
   }
-
-  if (id) {
-    return { id, name };
-  }
-  return null;
-}
-
-/**
- * API 1: Get Current Record with Dynamic Module Resolution
- * Checks target entityName (e.g. CustomModule19), falling back to Test / Test_Only.
- * @param {string} recordId 
- * @param {string} [entityName]
- * @returns {Promise<{id: string, name: string}>} Product object
- */
-export async function getCurrentRecordProduct(recordId, entityName = null) {
-  log.info(`Executing ZOHO.CRM.API.getRecord for RecordID: "${recordId}", Primary Entity: "${entityName}"`);
 
   if (!isZohoEnvironment()) {
-    const errorMsg = 'ZOHO.CRM.API is not initialized on window object. Ensure the widget is running inside Zoho CRM.';
-    log.error(errorMsg);
-    throw new Error(errorMsg);
+    throw new Error('ZOHO.CRM.API is not available');
   }
 
-  const entitiesToTry = [];
-  if (entityName) entitiesToTry.push(entityName);
-  if (!entitiesToTry.includes('CustomModule19')) entitiesToTry.push('CustomModule19');
-  if (!entitiesToTry.includes('Test')) entitiesToTry.push('Test');
-  if (!entitiesToTry.includes('Test_Only')) entitiesToTry.push('Test_Only');
+  const response = await ZOHO.CRM.API.getRecord({
+    Entity: MODULES.PRODUCTS,
+    RecordID: productId
+  });
 
-  let lastError = null;
-  for (const entity of entitiesToTry) {
-    try {
-      log.info(`Attempt: Calling ZOHO.CRM.API.getRecord for Entity "${entity}" (ID: ${recordId})...`);
-      const response = await window.ZOHO.CRM.API.getRecord({
-        Entity: entity,
-        RecordID: recordId
-      });
-
-      log.info(`ZOHO.CRM.API.getRecord ("${entity}") Response:`, response);
-
-      if (response && response.data && Array.isArray(response.data) && response.data.length > 0) {
-        const product = extractProductFromRecord(response.data[0]);
-        if (product) {
-          log.info(`Successfully loaded Product from Entity "${entity}":`, product);
-          return product;
-        }
-      }
-    } catch (err) {
-      log.warn(`getRecord for Entity "${entity}" failed:`, err);
-      lastError = err;
-    }
-  }
-
-  throw new Error(`Product lookup field is empty or record could not be fetched for Record ID: ${recordId}`);
+  return response?.data?.[0] || null;
 }
 
 /**
- * API 2: Fetch Complaint Categories for a Product via ZOHO.CRM.API.searchRecord
- * @param {string} productId 
- * @param {string} [productName]
+ * Fetch Complaint Categories for a Product based on Product ID.
+ * @param {string} productId
  * @returns {Promise<Array<{id: string, name: string}>>}
  */
-export async function fetchComplaintCategories(productId, productName = '') {
-  log.info(`Executing ZOHO.CRM.API.searchRecord for Complaint_Category (Product ID: "${productId}", Name: "${productName}")`);
+export async function fetchComplaintCategories(productId) {
+  if (!isZohoEnvironment()) return [];
 
-  if (!isZohoEnvironment()) {
-    log.error('ZOHO.CRM.API is not initialized. Cannot perform searchRecord.');
-    return [];
+  if (productId) {
+    try {
+      const query = `(${FIELDS.Select_Product}.id:equals:${productId})`;
+      const response = await ZOHO.CRM.API.searchRecord({
+        Entity: MODULES.COMPLAINT_X_PRODUCTS,
+        Type: 'criteria',
+        Query: query
+      });
+
+      if (response?.data?.length > 0) {
+        console.log(response?.data, "response?.data")
+        return response.data.map(item => ({
+          id: item.Complaint_Category_in_Products?.id || item.id,
+          name: item.Complaint_Category_in_Products?.name || item[FIELDS.CATEGORY_NAME] || item.Name || 'Unnamed Category'
+        }));
+      }
+    } catch (err) { /* fallback below */ }
   }
 
   try {
-    const primaryQuery = `(${FIELDS.CATEGORY_PRODUCT_LOOKUP}.id:equals:${productId})`;
-    log.info(`Executing Primary Search Query: "${primaryQuery}"`);
-
-    let response = await window.ZOHO.CRM.API.searchRecord({
-      Entity: MODULES.COMPLAINT_CATEGORY,
-      Type: 'criteria',
-      Query: primaryQuery
+    const allRes = await ZOHO.CRM.API.getAllRecords({
+      Entity: MODULES.COMPLAINT_CATEGORY
     });
 
-    log.info('Raw Complaint_Category Primary Search Response:', response);
-
-    // Fallback search by Product Name if ID query yields no matches
-    if ((!response || !response.data || !Array.isArray(response.data) || response.data.length === 0) && productName) {
-      const secondaryQuery = `(${FIELDS.CATEGORY_PRODUCT_LOOKUP}:equals:${productName})`;
-      log.warn(`Primary ID query yielded no results. Retrying search by Product Name: "${secondaryQuery}"`);
-
-      response = await window.ZOHO.CRM.API.searchRecord({
-        Entity: MODULES.COMPLAINT_CATEGORY,
-        Type: 'criteria',
-        Query: secondaryQuery
-      });
-
-      log.info('Raw Complaint_Category Secondary Search Response:', response);
-    }
-
-    if (response && response.data && Array.isArray(response.data)) {
-      const list = response.data.map(item => ({
+    if (allRes?.data?.length > 0) {
+      console.log(allRes?.data, "allRes?.data")
+      return allRes.data.map(item => ({
         id: item.id,
         name: item[FIELDS.CATEGORY_NAME] || item.Name || 'Unnamed Category'
       }));
-      log.info(`Successfully fetched ${list.length} Complaint Category records from CRM:`, list);
-      return list;
     }
+  } catch (err) { /* no categories */ }
 
-    log.warn(`No Complaint Categories found in CRM matching Product ID: "${productId}"`, response);
-    return [];
-  } catch (err) {
-    log.error(`ZOHO.CRM.API.searchRecord failed for Complaint_Category (Product ID: ${productId})`, err);
-    return [];
-  }
+  return [];
 }
 
 /**
- * API 3: Fetch Solutions for a Complaint Category
- * @param {string} complaintId 
+ * Fetch Solutions for a Complaint Category.
+ * @param {string} complaintId
  * @returns {Promise<Array<{id: string, name: string}>>}
  */
 export async function fetchComplaintSolutions(complaintId) {
-  log.info(`Executing ZOHO.CRM.API.searchRecord for Complaint_Solution with Complaint ID: "${complaintId}"`);
+  if (!isZohoEnvironment()) return [];
 
-  if (!isZohoEnvironment()) {
-    log.error('ZOHO.CRM.API is not initialized. Cannot perform searchRecord.');
-    return [];
+  if (complaintId) {
+    try {
+      const query = `(${FIELDS.SOLUTION_COMPLAINT_LOOKUP}.id:equals:${complaintId})`;
+      const response = await ZOHO.CRM.API.searchRecord({
+        Entity: MODULES.COMPLAINT_SOLUTION,
+        Type: 'criteria',
+        Query: query
+      });
+
+      if (response?.data?.length > 0) {
+        return response.data.map(item => ({
+          id: item.id,
+          name: item[FIELDS.SOLUTION_NAME] || item.Name || 'Unnamed Solution'
+        }));
+      }
+    } catch (err) { /* fallback below */ }
   }
 
   try {
-    const query = `(${FIELDS.SOLUTION_COMPLAINT_LOOKUP}.id:equals:${complaintId})`;
-    log.info(`Executing Search Query: "${query}"`);
-
-    const response = await window.ZOHO.CRM.API.searchRecord({
-      Entity: MODULES.COMPLAINT_SOLUTION,
-      Type: 'criteria',
-      Query: query
+    const allRes = await ZOHO.CRM.API.getAllRecords({
+      Entity: MODULES.COMPLAINT_SOLUTION
     });
 
-    log.info('Raw Complaint_Solution Search Response:', response);
-
-    if (response && response.data && Array.isArray(response.data)) {
-      const list = response.data.map(item => ({
+    if (allRes?.data?.length > 0) {
+      return allRes.data.map(item => ({
         id: item.id,
         name: item[FIELDS.SOLUTION_NAME] || item.Name || 'Unnamed Solution'
       }));
-      log.info(`Successfully fetched ${list.length} Complaint Solution records from CRM:`, list);
-      return list;
     }
+  } catch (err) { /* no solutions */ }
 
-    log.warn(`No Complaint Solutions found in CRM matching Complaint ID: "${complaintId}"`, response);
-    return [];
-  } catch (err) {
-    log.error(`ZOHO.CRM.API.searchRecord failed for Complaint_Solution (Complaint ID: ${complaintId})`, err);
-    return [];
-  }
+  return [];
 }
 
 /**
- * API 4: Save Subform Rows to Record with Dynamic Module Resolution
- * @param {string} recordId 
- * @param {Array<{complaintId: string, solutionId: string}>} rows 
- * @param {string} [entityName]
+ * Save Subform Rows to CRM Record.
+ * @param {string} recordId
+ * @param {Array} rows
  * @returns {Promise<any>}
  */
-export async function saveSubformRows(recordId, rows, entityName = null) {
-  if (!recordId || !rows || rows.length === 0) {
-    throw new Error('Record ID or subform row data missing.');
+export async function saveSubformRows(recordId, rows) {
+  if (!recordId) {
+    throw new Error("Record ID is missing.");
   }
 
-  const subformPayload = rows.map(row => ({
-    [FIELDS.SUBFORM_COL_COMPLAINT]: { id: row.complaintId },
-    [FIELDS.SUBFORM_COL_SOLUTION]: { id: row.solutionId }
-  }));
-
-  const entitiesToTry = [];
-  if (entityName) entitiesToTry.push(entityName);
-  if (!entitiesToTry.includes('CustomModule19')) entitiesToTry.push('CustomModule19');
-  if (!entitiesToTry.includes('Test')) entitiesToTry.push('Test');
-  if (!entitiesToTry.includes('Test_Only')) entitiesToTry.push('Test_Only');
+  if (!rows || rows.length === 0) {
+    throw new Error("Subform row data is missing.");
+  }
 
   if (!isZohoEnvironment()) {
-    throw new Error('ZOHO.CRM.API is not initialized.');
+    throw new Error("ZOHO.CRM.API is not available.");
   }
 
-  let lastErr = null;
-  for (const entity of entitiesToTry) {
-    try {
-      log.info(`Saving subform rows to Entity "${entity}"...`);
-      const res = await window.ZOHO.CRM.API.updateRecord({
-        Entity: entity,
-        APIData: {
-          id: recordId,
-          [FIELDS.SUBFORM_COMPLAINT]: subformPayload
-        }
-      });
-      log.info(`updateRecord ("${entity}") response:`, res);
-      return res;
-    } catch (err) {
-      log.warn(`updateRecord for "${entity}" failed:`, err);
-      lastErr = err;
+  console.log("========== SAVE SUBFORM ==========");
+  console.log("recordId:", recordId);
+  console.log("recordId type:", typeof recordId);
+  console.log("module:", MODULES.CUSTOM_MODULE);
+  console.log("rows:", rows);
+
+  const subformPayload = rows.map((row) => ({
+    [FIELDS.SUBFORM_COL_COMPLAINT]: {
+      id: row.complaintId
+    },
+
+    [FIELDS.SUBFORM_COL_SOLUTION]: {
+      id: row.solutionId
     }
-  }
+  }));
 
-  throw lastErr || new Error('Failed to update record subform.');
+  const APIData = {
+    // data: {
+    id: recordId,
+    [FIELDS.SUBFORM_COMPLAINT]: subformPayload
+    // }
+  };
+
+  console.log(
+    "FINAL API PAYLOAD:",
+    JSON.stringify(APIData, null, 2)
+  );
+
+  const response = await ZOHO.CRM.API.updateRecord({
+    Entity: MODULES.CUSTOM_MODULE + '/' + recordId,
+    APIData
+
+  });
+
+  console.log("ZOHO UPDATE RESPONSE:", response);
+
+  return response;
 }
 
 /**
- * Close Zoho CRM Widget Popup
+ * Close Zoho CRM Widget Popup.
  */
 export function closeWidgetPopup() {
   try {
-    if (isZohoEnvironment() && window.ZOHO.CRM.UI && window.ZOHO.CRM.UI.Popup) {
+    if (isZohoEnvironment() && window.ZOHO.CRM.UI?.Popup) {
       window.ZOHO.CRM.UI.Popup.close();
     }
-  } catch (err) {
-    log.error('Error closing popup', err);
-  }
+  } catch (err) { /* silent */ }
 }
 
 /**
- * Refresh Parent CRM Record Page
+ * Refresh Parent CRM Record Page.
  */
 export function refreshParentRecord() {
   try {
-    if (isZohoEnvironment() && window.ZOHO.CRM.UI && window.ZOHO.CRM.UI.Record) {
+    if (isZohoEnvironment() && window.ZOHO.CRM.UI?.Record) {
       window.ZOHO.CRM.UI.Record.refresh();
     }
-  } catch (err) {
-    log.error('Error refreshing parent record', err);
-  }
+  } catch (err) { /* silent */ }
 }
